@@ -43,6 +43,8 @@
     transform: translate(-50%, 3px); padding: 2px 7px; border-radius: 4px; white-space: nowrap; pointer-events: none;
     background: rgba(0,0,0,.85); color: #fff; opacity: 0; transition: opacity .12s, transform .12s; }
   #controls .bar [data-label]:hover::after { opacity: 1; transform: translate(-50%, 0); }
+  #download .bar .save { display: flex; align-items: center; height: 18px; padding: 4px 7px; }
+  #download .bar .save svg { width: 14px; height: 14px; fill: #fff; }
   #about .panel { width: 380px; padding: 14px 16px; }
   #about .head { display: flex; justify-content: space-between; align-items: center; margin: 0 0 8px; }
   #about h1 { font-size: 13px; margin: 0; font-weight: 600; }
@@ -70,12 +72,16 @@
 <div id="controls">
 <div id="shapes"><div class="bar"></div></div>
 <div id="favs"></div>
+<div id="download"><div class="bar"><button class="save" data-label="Download JPG" aria-label="Download JPG">
+  <svg viewBox="0 0 16 16"><path d="M7 2h2v6.6l2.3-2.3 1.4 1.4L8 12.4 3.3 7.7l1.4-1.4L7 8.6V2zM3 13h10v1.6H3z"/></svg></button></div></div>
 <div id="about">
   <div class="panel">
     <div class="head"><h1>Nibble</h1><button class="close" aria-label="Close">×</button></div>
     <p>Three random photographs. Two are punched with same-size holes and stacked over the third. Click anywhere for a new combination.</p>
     <h2>Shapes</h2>
     <p>The shapes in the controls change the punch on the photos you’re looking at. Press <kbd>[</kbd> and <kbd>]</kbd> to step through them.</p>
+    <h2>Download</h2>
+    <p>Press <kbd>D</kbd> (or the arrow) to save the collage on screen as a high-quality JPG.</p>
     <h2>Favorites</h2>
     <p>Press <kbd>F</kbd> (or <kbd>♡</kbd>) to favorite a combination; the exact holes and shape are kept, not just the photos. Press <kbd>L</kbd> (or the number beside it) to see your favorites.</p>
     <p>Favorites live in this browser only. Use export / import in the list to back them up or move them.</p>
@@ -134,6 +140,7 @@ const sheets = Array.from({ length: LAYERS }, (_, i) => {
 });
 
 // Texture overlays sit above every sheet (and below the step nav).
+let grainTile;   // kept so a download can reproduce the grain
 function addTexture() {
   const T = 256, dpr = window.devicePixelRatio || 1;
   const c = document.createElement('canvas');
@@ -146,6 +153,7 @@ function addTexture() {
     img.data[i + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
+  grainTile = c;
   const grain = document.createElement('div');
   grain.className = 'grain';
   grain.style.setProperty('--grain', GRAIN);
@@ -459,24 +467,86 @@ function looseMask(w, h, holes, overflowX, overflowY) {
   return out;
 }
 
-function render({ photo, shadows }, img, rnd, shape) {
-  const w = innerWidth, h = innerHeight;
-  const ctx = sizeCanvas(photo, w, h);
-
-  // cover-fit the image to the window
+// Cover-fit a photo to a w x h window (in ctx's current units) and punch its holes.
+function drawPhoto(ctx, img, w, h, holes, loose) {
   const s = Math.max(w / img.naturalWidth, h / img.naturalHeight);
   const dw = img.naturalWidth * s, dh = img.naturalHeight * s;
   ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
-
-  if (!shadows.length) return;
-
-  const holes = holePath(w, h, rnd, shape);
-  const loose = looseMask(w, h, holes, dw > w + 1, dh > h + 1);
+  if (!holes) return;
   ctx.globalCompositeOperation = 'destination-out';
   ctx.fill(holes);
   if (loose) ctx.drawImage(loose, 0, 0, w, h);
+  ctx.globalCompositeOperation = 'source-over';
+}
 
-  for (const sh of shadows) renderShadow(sh, holes, loose, w, h, rnd);
+function render(sheet, img, rnd, shape) {
+  const w = innerWidth, h = innerHeight;
+  let holes = null, loose = null;
+  if (sheet.shadows.length) {
+    const s = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+    holes = holePath(w, h, rnd, shape);
+    loose = looseMask(w, h, holes, img.naturalWidth * s > w + 1, img.naturalHeight * s > h + 1);
+  }
+  drawPhoto(sizeCanvas(sheet.photo, w, h), img, w, h, holes, loose);
+  Object.assign(sheet, { img, holes, loose, w, h });   // kept for downloads
+  for (const sh of sheet.shadows) renderShadow(sh, holes, loose, w, h, rnd);
+}
+
+// Flatten the current collage into a JPEG: photos redrawn at up to 2x (or the
+// screen's pixel density), shadows multiplied in, then the paper grain and
+// halftone screen that sit over the page as overlays.
+async function downloadJPG() {
+  if (!current) return;
+  const { w, h } = sheets[0];
+  const dpr = window.devicePixelRatio || 1;
+  const S = Math.min(Math.max(2, dpr), 4096 / Math.max(w, h));
+  const out = document.createElement('canvas');
+  out.width = Math.round(w * S); out.height = Math.round(h * S);
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingQuality = 'high';
+
+  for (const sheet of sheets) {
+    for (const sh of sheet.shadows) {
+      const m = new DOMMatrix(getComputedStyle(sh.canvas).transform);
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.drawImage(sh.canvas, (m.e - SHADOW_MARGIN) * S, (m.f - SHADOW_MARGIN) * S, sh.canvas.width * S, sh.canvas.height * S);
+    }
+    const layer = document.createElement('canvas');
+    layer.width = out.width; layer.height = out.height;
+    const lctx = layer.getContext('2d');
+    lctx.imageSmoothingQuality = 'high';
+    lctx.scale(S, S);
+    drawPhoto(lctx, sheet.img, w, h, sheet.holes, sheet.loose);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(layer, 0, 0);
+  }
+
+  // halftone: 3px dot screen at 15 degrees, multiplied (matches .halftone)
+  const cell = 3 * S, tile = document.createElement('canvas');
+  tile.width = tile.height = Math.round(cell);
+  const t = tile.getContext('2d'), R = Math.hypot(cell, cell) / 2;
+  const g = t.createRadialGradient(cell / 2, cell / 2, 0, cell / 2, cell / 2, R);
+  g.addColorStop(0, '#000'); g.addColorStop(0.3, '#000'); g.addColorStop(0.55, 'rgba(0,0,0,0)');
+  t.fillStyle = g; t.fillRect(0, 0, cell, cell);
+  const dots = ctx.createPattern(tile, 'repeat');
+  dots.setTransform(new DOMMatrix().rotate(15));
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.globalAlpha = HALFTONE;
+  ctx.fillStyle = dots; ctx.fillRect(0, 0, out.width, out.height);
+
+  // paper grain, soft-light (matches .grain: one tile pixel per device pixel)
+  const grainPat = ctx.createPattern(grainTile, 'repeat');
+  grainPat.setTransform(new DOMMatrix().scale(S / dpr));
+  ctx.globalCompositeOperation = 'soft-light';
+  ctx.globalAlpha = GRAIN;
+  ctx.fillStyle = grainPat; ctx.fillRect(0, 0, out.width, out.height);
+
+  const blob = await new Promise(r => out.toBlob(r, 'image/jpeg', 0.92));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `nibble-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.jpg`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 let current = null;          // { urls, seed, shape, imgs }
@@ -572,6 +642,9 @@ const toggleAbout = () => {
   updateCredits();
 };
 about.querySelector('.about').addEventListener('click', toggleAbout);
+const dl = document.getElementById('download');
+dl.addEventListener('click', e => e.stopPropagation());   // don't advance the images
+dl.querySelector('.save').addEventListener('click', downloadJPG);
 about.querySelector('.close').addEventListener('click', () => about.classList.remove('open'));
 const bar = document.querySelector('#shapes .bar');
 SHAPE_NAMES.forEach(name => {
@@ -588,6 +661,7 @@ setShape(shape);
 addEventListener('keydown', e => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === 'a' || e.key === 'A') toggleAbout();
+  if (e.key === 'd' || e.key === 'D') downloadJPG();
   if (e.key === 'Escape') { about.classList.remove('open'); document.getElementById('favs')?.classList.remove('open'); }
   const step = e.key === ']' ? 1 : e.key === '[' ? -1 : 0;
   if (step) setShape(SHAPE_NAMES[(SHAPE_NAMES.indexOf(shape) + step + SHAPE_NAMES.length) % SHAPE_NAMES.length]);
