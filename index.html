@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nibble</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: pointer; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  canvas.shadow {
+    inset: calc(-1 * var(--m)); width: calc(100vw + 2 * var(--m)); height: calc(100vh + 2 * var(--m));
+    mix-blend-mode: multiply;   /* darken what's underneath, keeping its colour */
+  }
+  /* magazine-page texture over the whole collage: paper grain + faint halftone screen */
+  .grain, .halftone { position: fixed; inset: 0; pointer-events: none; }
+  .grain { mix-blend-mode: soft-light; opacity: var(--grain); }
+  .halftone {
+    inset: -50%; transform: rotate(15deg);   /* angled like a print screen */
+    background: radial-gradient(circle, #000 0 30%, transparent 55%) 0 0 / 3px 3px;
+    mix-blend-mode: multiply; opacity: var(--halftone);
+  }
+  /* all controls sit together bottom-right; panels open above the cluster */
+  #controls { position: fixed; right: 12px; bottom: 12px; z-index: 10; cursor: default;
+    display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: flex-end; gap: 6px; max-width: calc(100vw - 24px);
+    font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff; }
+  #controls .bar { display: inline-flex; flex-wrap: wrap; align-items: stretch; border-radius: 4px;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(6px); opacity: .45; transition: opacity .15s; }
+  #controls .bar:hover, #controls .open .bar { opacity: 1; }
+  #controls .bar button { all: unset; cursor: pointer; padding: 4px 9px; border-radius: 4px; }
+  #shapes .bar { padding: 0 2px; }
+  #controls .bar button:hover { background: rgba(255,255,255,.12); }
+  #controls .panel { display: none; position: absolute; right: 0; bottom: calc(100% + 6px); box-sizing: border-box;
+    max-width: calc(100vw - 24px); max-height: min(70vh, 640px); overflow-y: auto; border-radius: 6px;
+    background: rgba(0,0,0,.75); backdrop-filter: blur(8px); }
+  #controls .open .panel { display: block; }
+  #shapes .bar .shape { position: relative; height: 18px; padding: 4px 5px; display: flex; align-items: center; }  /* 18px = text line height, so all three bars match */
+  #shapes .bar .shape svg { width: 15px; height: 15px; fill: #fff; opacity: .4; }
+  #shapes .bar .shape.on svg { opacity: 1; }
+  /* tooltips: any control with a data-label */
+  #controls .bar [data-label] { position: relative; }
+  #controls .bar [data-label]::after { content: attr(data-label); position: absolute; left: 50%; bottom: calc(100% + 8px);
+    transform: translate(-50%, 3px); padding: 2px 7px; border-radius: 4px; white-space: nowrap; pointer-events: none;
+    background: rgba(0,0,0,.85); color: #fff; opacity: 0; transition: opacity .12s, transform .12s; }
+  #controls .bar [data-label]:hover::after { opacity: 1; transform: translate(-50%, 0); }
+  #about .panel { width: 380px; padding: 14px 16px; }
+  #about .head { display: flex; justify-content: space-between; align-items: center; margin: 0 0 8px; }
+  #about h1 { font-size: 13px; margin: 0; font-weight: 600; }
+  #about .head .close { all: unset; cursor: pointer; width: 20px; height: 20px; line-height: 20px; text-align: center;
+    border-radius: 4px; font-size: 16px; color: #aaa; margin-right: -4px; }
+  #about .head .close:hover { color: #fff; background: rgba(255,255,255,.12); }
+  #about h2 { font-size: 12px; margin: 14px 0 4px; font-weight: 600; color: #aaa; }
+  #about p { margin: 0 0 6px; color: #ddd; }
+  #about a { color: #fff; }
+  #about kbd { font: inherit; padding: 0 4px; border: 1px solid #666; border-radius: 3px; }
+  #loading { position: fixed; left: 50%; top: 50%; z-index: 20; width: 56px; height: 56px; margin: -28px 0 0 -28px;
+    display: grid; place-items: center; border-radius: 50%; background: rgba(0,0,0,.5); backdrop-filter: blur(6px);
+    pointer-events: none; opacity: 0; transition: opacity .2s; }
+  #loading.on { opacity: 1; }
+  #loading svg { width: 26px; height: 26px; fill: #fff; animation: punch 1.1s ease-in-out infinite; }
+  @keyframes punch { 0%, 100% { transform: scale(1) rotate(0); } 45% { transform: scale(.72) rotate(-12deg); } 60% { transform: scale(1.08) rotate(4deg); } }
+  #loading .msg { position: absolute; top: 64px; white-space: nowrap; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #fff; background: rgba(0,0,0,.6); padding: 3px 8px; border-radius: 4px; display: none; }
+  #loading.error svg { animation: none; opacity: .5; }
+  #loading.error .msg { display: block; }
+  body.loading { cursor: progress; }
+</style>
+</head>
+<body>
+<div id="controls">
+<div id="shapes"><div class="bar"></div></div>
+<div id="favs"></div>
+<div id="about">
+  <div class="panel">
+    <div class="head"><h1>Nibble</h1><button class="close" aria-label="Close">×</button></div>
+    <p>Three random photographs. Two are punched with same-size holes and stacked over the third. Click anywhere for a new combination.</p>
+    <h2>Shapes</h2>
+    <p>The shapes in the controls change the punch on the photos you’re looking at. Press <kbd>[</kbd> and <kbd>]</kbd> to step through them.</p>
+    <h2>Favorites</h2>
+    <p>Press <kbd>F</kbd> (or <kbd>♡</kbd>) to favorite a combination; the exact holes and shape are kept, not just the photos. Press <kbd>L</kbd> (or the number beside it) to see your favorites.</p>
+    <p>Favorites live in this browser only. Use export / import in the list to back them up or move them.</p>
+    <h2>Sources</h2>
+    <p>Photos are drawn at random from <a href="https://commons.wikimedia.org/" target="_blank" rel="noopener">Wikimedia Commons</a> and belong to their authors under their own free licences.</p>
+    <p class="credits"></p>
+    <h2>Made by</h2>
+    <p><a href="https://jakerochford.com" target="_blank" rel="noopener">Jake Rochford</a></p>
+  </div>
+  <div class="bar">
+    <button class="about" title="About (A)">about</button>
+  </div>
+</div>
+</div>
+<div id="loading"><svg viewBox="-1.9 -1.9 3.8 3.8"><path/></svg><div class="msg">Couldn’t reach Wikimedia, click to try again</div></div>
+<script src="/favorites.js"></script>
+<script>
+const CIRCLES = 40;          // circles cut per image
+const RADIUS_FRAC = 0.09;    // radius as fraction of the shorter window side
+const MIN_SIDE = 1600;       // reject source images smaller than this (px, long side)
+const LAYERS = 3;            // bottom photo is uncut; the rest are punched sheets
+const WOBBLE = 0.025;        // how far hole edges stray from a true circle (fraction of radius)
+const ROUGH = 0.005;         // fine jitter along hole edges (fraction of radius)
+// Shadows are multiplied onto what they fall on, so they pick up its colour
+// instead of reading as flat black. Each sheet casts two: a tight, dark contact
+// shadow hugging the hole's edge, and a wide, warm, diffuse one spreading out.
+// Offset/blur are per unit of height (the top sheet sits higher).
+const SHADOWS = [
+  { color: 'rgb(150, 118, 98)', dx: 3, dy: 6, blur: 9 },   // ambient: warm, soft, far
+  { color: 'rgb(84, 62, 52)',   dx: 1, dy: 2, blur: 2.5 }, // contact: dark, tight
+];
+const SHADOW_GRAIN = 0.35;   // fine noise in shadow density
+const SHADOW_MOTTLE = 0.3;   // broad, uneven patches of lighter/denser shadow
+const GRAIN = 0.9;           // paper-grain strength (soft-light overlay opacity)
+const HALFTONE = 0.1;        // halftone dot screen strength (dot spacing: 3px, in the .halftone CSS)
+const SHADOW_MARGIN = 60;    // px the shadow canvas extends past the window, so blur doesn't fade at edges
+
+const CANVAS_FILTER = typeof document.createElement('canvas').getContext('2d').filter === 'string';
+
+// Bottom-to-top stack. Each punched sheet has a shadow canvas just beneath it
+// that falls through its holes onto everything lower. Higher sheets sit
+// further up, so their shadows fall further and softer.
+const sheets = Array.from({ length: LAYERS }, (_, i) => {
+  const shadows = i === 0 ? [] : SHADOWS.map(spec => {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'shadow';
+    canvas.style.setProperty('--m', SHADOW_MARGIN + 'px');
+    canvas.style.transform = `translate(${spec.dx * i}px, ${spec.dy * i}px)`;
+    // blur is baked into the canvas so grain can go on top; fall back to CSS
+    if (!CANVAS_FILTER) canvas.style.filter = `blur(${spec.blur * i}px)`;
+    document.body.appendChild(canvas);
+    return { canvas, ...spec, blur: spec.blur * i };
+  });
+  const photo = document.body.appendChild(document.createElement('canvas'));
+  return { photo, shadows };
+});
+
+// Texture overlays sit above every sheet (and below the step nav).
+function addTexture() {
+  const T = 256, dpr = window.devicePixelRatio || 1;
+  const c = document.createElement('canvas');
+  c.width = c.height = T;
+  const ctx = c.getContext('2d');
+  const img = ctx.createImageData(T, T);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const v = 128 + (Math.random() + Math.random() - 1) * 110;   // soft, centred grain
+    img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const grain = document.createElement('div');
+  grain.className = 'grain';
+  grain.style.setProperty('--grain', GRAIN);
+  grain.style.background = `url(${c.toDataURL()}) 0 0 / ${T / dpr}px ${T / dpr}px`;
+  const halftone = document.createElement('div');
+  halftone.className = 'halftone';
+  halftone.style.setProperty('--halftone', HALFTONE);
+  document.body.append(halftone, grain);
+}
+addTexture();
+
+// Fetch a batch of random Wikimedia Commons photos with large JPEG originals.
+async function randomPhotos(n) {
+  const out = [];
+  while (out.length < n) {
+    const url = 'https://commons.wikimedia.org/w/api.php?' + new URLSearchParams({
+      action: 'query', format: 'json', origin: '*',
+      generator: 'random', grnnamespace: '6', grnlimit: '20',
+      prop: 'imageinfo', iiprop: 'url|size|mime', iiurlwidth: '2560',
+    });
+    const data = await (await fetch(url)).json();
+    for (const p of Object.values(data.query?.pages ?? {})) {
+      const ii = p.imageinfo?.[0];
+      if (!ii || ii.mime !== 'image/jpeg') continue;
+      if (Math.max(ii.width, ii.height) < MIN_SIDE) continue;
+      out.push(ii.thumburl || ii.url);
+      if (out.length === n) break;
+    }
+  }
+  return out;
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function nextSet() {
+  for (let tries = 0; tries < 5; tries++) {
+    try {
+      const urls = await randomPhotos(sheets.length);
+      return { urls, imgs: await Promise.all(urls.map(loadImage)) };
+    } catch (e) { /* retry with a fresh pair */ }
+  }
+  throw new Error('could not load images');
+}
+
+function sizeCanvas(canvas, w, h) {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+
+// Seeded randomness: the seed fixes every hole and shadow, so a composition is
+// fully described by its image URLs + seed (that's what a favorite stores).
+function mulberry32(a) {
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// --- punch shapes ---------------------------------------------------------
+// Each shape is a closed outline of unit points, scaled to the same area as a
+// unit circle (pi) and centred on its centroid, so every punch removes about
+// the same amount of photo.
+function normalize(pts) {
+  let A = 0, cx = 0, cy = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x0, y0] = pts[i], [x1, y1] = pts[(i + 1) % pts.length], c = x0 * y1 - x1 * y0;
+    A += c; cx += (x0 + x1) * c; cy += (y0 + y1) * c;
+  }
+  A /= 2; cx /= 6 * A; cy /= 6 * A;
+  const k = Math.sqrt(Math.PI / Math.abs(A));
+  return pts.map(([x, y]) => [(x - cx) * k, (y - cy) * k]);
+}
+// evenly spaced points along a closed outline
+function resample(pts, n = 140) {
+  const seg = pts.map((p, i) => Math.hypot(pts[(i + 1) % pts.length][0] - p[0], pts[(i + 1) % pts.length][1] - p[1]));
+  const total = seg.reduce((a, b) => a + b, 0), out = [];
+  let i = 0, acc = 0;
+  for (let j = 0; j < n; j++) {
+    const d = (j / n) * total;
+    while (acc + seg[i] < d) acc += seg[i++];
+    const t = seg[i] ? (d - acc) / seg[i] : 0, a = pts[i], b = pts[(i + 1) % pts.length];
+    out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+  }
+  return out;
+}
+// round off sharp points: each pass nudges every point towards its neighbours
+function soften(pts, passes) {
+  for (let p = 0; p < passes; p++) {
+    pts = pts.map((q, i) => {
+      const a = pts[(i - 1 + pts.length) % pts.length], b = pts[(i + 1) % pts.length];
+      return [(a[0] + 2 * q[0] + b[0]) / 4, (a[1] + 2 * q[1] + b[1]) / 4];
+    });
+  }
+  return pts;
+}
+// absolute-coordinate SVG path (M L C Q Z only), y down, optional tilt in degrees
+function fromPath(d, tilt = 0) {
+  const tok = d.match(/[MLCQZ]|-?\d*\.?\d+/g), pts = [];
+  let cmd, i = 0, cur = [0, 0];
+  const num = () => +tok[i++];
+  while (i < tok.length) {
+    if (/[MLCQZ]/.test(tok[i])) cmd = tok[i++];
+    if (cmd === 'Z') continue;
+    if (cmd === 'M' || cmd === 'L') { cur = [num(), num()]; pts.push(cur); }
+    else {
+      const ctl = cmd === 'C' ? [[num(), num()], [num(), num()]] : [[num(), num()]];
+      const end = [num(), num()], p0 = cur, P = [p0, ...ctl, end], deg = P.length - 1;
+      for (let s = 1; s <= 24; s++) {
+        const t = s / 24, u = 1 - t;
+        const w = deg === 3 ? [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t] : [u * u, 2 * u * t, t * t];
+        pts.push([w.reduce((a, k, j) => a + k * P[j][0], 0), w.reduce((a, k, j) => a + k * P[j][1], 0)]);
+      }
+      cur = end;
+    }
+  }
+  const r = tilt * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  return pts.map(([x, y]) => [x * c - y * s, x * s + y * c]);
+}
+const shapeFrom = (pts, passes = 0) => normalize(soften(resample(pts), passes));
+const curvePts = (fn, n = 240) => Array.from({ length: n }, (_, j) => fn(j / n * Math.PI * 2));
+const ring = (n, r = 1, rot = -Math.PI / 2) =>
+  Array.from({ length: n }, (_, j) => [Math.cos(rot + j / n * Math.PI * 2) * r, Math.sin(rot + j / n * Math.PI * 2) * r]);
+
+const SHAPES = {
+  circle: { label: 'Circle', pts: null },   // drawn directly, exactly as before shapes existed (keeps old favorites identical)
+  square: { label: 'Square', pts: shapeFrom(ring(4, 1, Math.PI / 4)) },
+  triangle: { label: 'Triangle', pts: shapeFrom(ring(3)) },
+  star: { label: 'Star', pts: shapeFrom(ring(10).map(([x, y], j) => j % 2 ? [x * 0.52, y * 0.52] : [x, y]), 40) },
+  heart: { label: 'Heart', pts: shapeFrom(curvePts(t => [16 * Math.sin(t) ** 3,
+    -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t))]), 40) },
+  flower: { label: 'Sakura', pts: shapeFrom(curvePts(t => {
+    // five rounded petals, each with a small notch at its tip
+    const u = ((t + Math.PI / 2) / (2 * Math.PI / 5)) % 1 * 2 - 1;      // -1..1 across a petal
+    const r = 0.42 + 0.58 * Math.cos(u * Math.PI / 2) ** 0.55 - 0.22 * Math.max(0, 1 - Math.abs(u) / 0.16);
+    return [Math.cos(t) * r, Math.sin(t) * r];
+  }, 600), 2) },
+  strawberry: { label: 'Strawberry', pts: shapeFrom(fromPath(
+    // rounded shoulders, body tapering to a soft, slightly off-centre tip;
+    // a stem and two uneven leaves, the left one smaller
+    'M30 26.5 C25 21 23 13 23.5 8 C24 6.5 25 6 26.5 6.5 C36 8.5 43 13 48 19 C50 12 56 4 66 1 C70 0.5 72 4 71 7 ' +
+    'C70 9 68 10.5 66 11.5 C62 14 60 18 59 22 C66 17 74 16 89 18.5 C91 19 91 20 90.5 21 C88 28 85 31 81 33 ' +
+    'C94 38 100 50 99 62 C98 80 82 98 65 114 C55 124 46 127 38 124 C30 121 25 114 20 104 C12 88 0 74 1 60 ' +
+    'C2 40 14 26 30 26.5 Z'), 2) },
+  apple: { label: 'Apple', pts: shapeFrom(fromPath(
+    'M44 30 C38 22 18 22 14 44 C10 66 30 92 42 90 C46 89 48 87 50 87 C52 87 54 89 58 90 C70 92 90 66 86 44 ' +
+    // sturdy stem, leaf joined along a broad base
+    'C82 22 64 22 57 29 L57 22 C66 19 76 15 80 6 C70 3 60 6 57 13 L56 8 C55 5 49 5 48 8 Z'), 1) },
+  butterfly: { label: 'Butterfly', pts: shapeFrom(fromPath(
+    'M50 42 C58 20 88 8 92 26 C95 40 78 50 56 50 C76 54 88 68 80 80 C72 90 58 78 53 64 C55 70 54 79 50 79 C46 79 45 70 47 64 ' +
+    'C42 78 28 90 20 80 C12 68 24 54 44 50 C22 50 5 40 8 26 C12 8 42 20 50 42 Z'), 1) },
+  umbrella: { label: 'Umbrella', pts: shapeFrom(fromPath(
+    'M8 50 C8 22 30 8 50 8 C70 8 92 22 92 50 Q81.5 41 71 50 Q62 42 53 50 L53 80 C53 88 62 88 62 80 L62 76 ' +
+    'L67 76 L67 80 C67 95 47 95 47 80 L47 50 Q38 42 29 50 Q18.5 41 8 50 Z')) },
+  candy: { label: 'Candy', pts: shapeFrom(fromPath(
+    'M30 44 C34 24 66 24 70 44 L74 47 L88 36 C86 46 86 54 88 64 L74 53 L70 56 C66 76 34 76 30 56 L26 53 ' +
+    'L12 64 C14 54 14 46 12 36 L26 47 Z', -25), 2) },
+};
+const SHAPE_NAMES = Object.keys(SHAPES);
+
+// One imperfect, hand-punched outline in unit space: a few slow wobbles around
+// the rim plus fine roughness. Always draws the same count of random numbers,
+// whatever the shape, so hole positions don't depend on the shape.
+function outline(shape, rnd) {
+  const waves = [2, 3, 5, 7].map(k => ({ k, a: WOBBLE * rnd() / Math.sqrt(k), p: rnd() * 6.283 }));
+  const N = 90, rough = Array.from({ length: N }, () => ROUGH * (rnd() * 2 - 1));
+  const bend = (a, j, n) => {
+    let f = 1 + rough[Math.floor(j * N / n)];
+    for (const wv of waves) f += wv.a * Math.sin(wv.k * a + wv.p);
+    return f;
+  };
+  const pts = SHAPES[shape]?.pts;
+  if (!pts) {
+    return Array.from({ length: N }, (_, j) => {
+      const t = (j / N) * Math.PI * 2, f = bend(t, j, N);
+      return [Math.cos(t) * f, Math.sin(t) * f];
+    });
+  }
+  // slight per-hole twist, as if each punch went in a little off-square
+  const rot = (waves[0].p / 6.283 - 0.5) * 0.25, cr = Math.cos(rot), sr = Math.sin(rot);
+  return pts.map(([px, py], j) => {
+    const x = px * cr - py * sr, y = px * sr + py * cr, f = bend(Math.atan2(y, x), j, pts.length);
+    return [x * f, y * f];
+  });
+}
+
+// Random same-size, overlapping holes in the given shape.
+function holePath(w, h, rnd, shape) {
+  const r = Math.min(w, h) * RADIUS_FRAC;
+  const path = new Path2D();
+  for (let c = 0; c < CIRCLES; c++) {
+    const x = rnd() * w, y = rnd() * h;
+    outline(shape, rnd).forEach(([ux, uy], j) => {
+      j ? path.lineTo(x + ux * r, y + uy * r) : path.moveTo(x + ux * r, y + uy * r);
+    });
+    path.closePath();
+  }
+  return path;
+}
+
+// SVG path data for a shape icon (fixed wobble, so icons look hand-cut too)
+const iconPath = (shape, seed = 7) =>
+  'M' + outline(shape, mulberry32(seed)).map(([x, y]) => x.toFixed(3) + ' ' + y.toFixed(3)).join('L') + 'Z';
+
+// Draw one textured shadow layer. Rendered at CSS-pixel resolution: it's soft,
+// and the grain reads better slightly coarse.
+function renderShadow(sh, holes, loose, w, h, rnd) {
+  const m = SHADOW_MARGIN, W = w + 2 * m, H = h + 2 * m;
+  const shape = document.createElement('canvas');
+  shape.width = W; shape.height = H;
+  const s = shape.getContext('2d');
+  s.fillStyle = sh.color;
+  s.fillRect(0, 0, W, H);
+  s.globalCompositeOperation = 'destination-out';
+  s.translate(m, m);
+  s.fill(holes);
+  if (loose) s.drawImage(loose, 0, 0);
+
+  const c = sh.canvas;
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d');
+  if (CANVAS_FILTER) ctx.filter = `blur(${sh.blur}px)`;
+  ctx.drawImage(shape, 0, 0);
+  ctx.filter = 'none';
+
+  // mottle: a tiny random field scaled up smoothly, lifting the shadow in patches
+  if (SHADOW_MOTTLE > 0) {
+    const cell = 70, mw = Math.ceil(W / cell) + 1, mh = Math.ceil(H / cell) + 1;
+    const mot = document.createElement('canvas');
+    mot.width = mw; mot.height = mh;
+    const mc = mot.getContext('2d'), md = mc.createImageData(mw, mh);
+    for (let i = 3; i < md.data.length; i += 4) md.data[i] = 255 * rnd();
+    mc.putImageData(md, 0, 0);
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.globalAlpha = SHADOW_MOTTLE;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(mot, 0, 0, mw * cell, mh * cell);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // grain: jitter density per pixel so the shadow has tooth, like ink on paper
+  if (SHADOW_GRAIN > 0 && CANVAS_FILTER) {
+    const img = ctx.getImageData(0, 0, W, H), d = img.data;
+    for (let i = 3; i < d.length; i += 4) {
+      if (d[i]) d[i] *= 1 + SHADOW_GRAIN * (rnd() + rnd() - 1);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+}
+
+// Pieces of a punched sheet that are no longer attached to it would fall away
+// in real life. Rasterise the sheet (window-sized, CSS px), find its connected
+// pieces and return a mask of the loose ones, or null if nothing is loose.
+// The sheet itself is the largest piece plus anything touching an edge where
+// the photo runs on past the window (it's attached off-screen, where there are
+// no holes).
+function looseMask(w, h, holes, overflowX, overflowY) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.fill(holes);
+  const img = x.getImageData(0, 0, w, h), d = img.data, n = w * h;
+  const label = new Int32Array(n).fill(-1);   // -1 hole, 0 unvisited paper, k>0 piece k
+  for (let i = 0; i < n; i++) if (d[i * 4 + 3] < 128) label[i] = 0;
+
+  const sizes = [0], anchored = [false], q = new Int32Array(n);
+  for (let start = 0; start < n; start++) {
+    if (label[start] !== 0) continue;
+    const k = sizes.length;
+    let head = 0, tail = 0, size = 0, edge = false;
+    label[start] = k; q[tail++] = start;
+    while (head < tail) {
+      const i = q[head++], X = i % w, Y = (i - X) / w;
+      size++;
+      if ((overflowX && (X === 0 || X === w - 1)) || (overflowY && (Y === 0 || Y === h - 1))) edge = true;
+      if (X > 0 && label[i - 1] === 0) { label[i - 1] = k; q[tail++] = i - 1; }
+      if (X < w - 1 && label[i + 1] === 0) { label[i + 1] = k; q[tail++] = i + 1; }
+      if (Y > 0 && label[i - w] === 0) { label[i - w] = k; q[tail++] = i - w; }
+      if (Y < h - 1 && label[i + w] === 0) { label[i + w] = k; q[tail++] = i + w; }
+    }
+    sizes.push(size); anchored.push(edge);
+  }
+  let biggest = 1;
+  for (let k = 2; k < sizes.length; k++) if (sizes[k] > sizes[biggest]) biggest = k;
+  anchored[biggest] = true;
+  if (anchored.slice(1).every(Boolean)) return null;
+
+  for (let i = 0; i < n; i++) {
+    d[i * 4 + 3] = label[i] > 0 && !anchored[label[i]] ? 255 : 0;
+  }
+  x.putImageData(img, 0, 0);
+  // grow it a pixel so no anti-aliased rim of a fallen piece survives
+  const out = document.createElement('canvas');
+  out.width = w; out.height = h;
+  const o = out.getContext('2d');
+  for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) o.drawImage(c, dx, dy);
+  return out;
+}
+
+function render({ photo, shadows }, img, rnd, shape) {
+  const w = innerWidth, h = innerHeight;
+  const ctx = sizeCanvas(photo, w, h);
+
+  // cover-fit the image to the window
+  const s = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+  const dw = img.naturalWidth * s, dh = img.naturalHeight * s;
+  ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+
+  if (!shadows.length) return;
+
+  const holes = holePath(w, h, rnd, shape);
+  const loose = looseMask(w, h, holes, dw > w + 1, dh > h + 1);
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fill(holes);
+  if (loose) ctx.drawImage(loose, 0, 0, w, h);
+
+  for (const sh of shadows) renderShadow(sh, holes, loose, w, h, rnd);
+}
+
+let current = null;          // { urls, seed, shape, imgs }
+let pending = nextSet();
+let busy = false;
+
+let shape = 'circle';
+try { if (SHAPE_NAMES.includes(localStorage.getItem('circles-shape'))) shape = localStorage.getItem('circles-shape'); } catch {}
+
+function show(urls, seed, imgs) {
+  current = { urls, seed, shape, imgs };
+  sheets.forEach((sh, i) => render(sh, imgs[i], mulberry32(seed + i * 7919), shape));
+  CircleFavorites.update();
+  updateCredits();
+}
+
+// Re-punch the photos on screen with another shape (same photos, same spots).
+function setShape(name) {
+  shape = name;
+  try { localStorage.setItem('circles-shape', name); } catch {}
+  document.querySelectorAll('#shapes .bar .shape').forEach(b => b.classList.toggle('on', b.dataset.shape === name));
+  loader.querySelector('path').setAttribute('d', iconPath(name, 11));
+  if (current) show(current.urls, current.seed, current.imgs);
+}
+
+// Loading indicator: shown at once on first load, and only after a short
+// delay on later clicks so a prefetched set doesn't flash it.
+const loader = document.getElementById('loading');
+let loaderTimer;
+function loading(on, error = false) {
+  clearTimeout(loaderTimer);
+  document.body.classList.toggle('loading', on);
+  loader.classList.toggle('error', error);
+  if (on) loaderTimer = setTimeout(() => loader.classList.add('on'), current ? 150 : 0);
+  else loader.classList.toggle('on', error);
+}
+
+async function advance() {
+  if (busy) return;
+  busy = true;
+  loading(true);
+  try {
+    const { urls, imgs } = await pending;
+    show(urls, (Math.random() * 2 ** 31) | 0, imgs);
+    loading(false);
+  } catch {
+    loading(false, true);
+  } finally {
+    pending = nextSet();    // prefetch the next set (or retry, after an error)
+    pending.catch(() => {});
+    busy = false;
+  }
+}
+
+async function showSaved(fav) {
+  if (busy) return;
+  busy = true;
+  loading(true);
+  try {
+    const imgs = await Promise.all(fav.urls.map(loadImage));
+    setShape(fav.shape || 'circle');
+    show(fav.urls, fav.seed, imgs);
+    loading(false);
+  } catch {
+    loading(false, true);
+  } finally { busy = false; }
+}
+
+// Small flattened copy of the current composition, for the favorites list.
+function thumbnail(width = 240) {
+  const k = width / innerWidth, w = width, h = Math.round(innerHeight * k);
+  const t = document.createElement('canvas');
+  t.width = w; t.height = h;
+  const ctx = t.getContext('2d');
+  for (const { photo, shadows } of sheets) {
+    for (const sh of shadows) {
+      const m = new DOMMatrix(getComputedStyle(sh.canvas).transform);
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.drawImage(sh.canvas, (m.e - SHADOW_MARGIN) * k, (m.f - SHADOW_MARGIN) * k, sh.canvas.width * k, sh.canvas.height * k);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(photo, 0, 0, w, h);
+  }
+  return t.toDataURL('image/jpeg', 0.75);
+}
+
+// About panel. Lists Commons file pages for the photos on screen.
+const about = document.getElementById('about');
+about.addEventListener('click', e => e.stopPropagation()); // don't advance the images
+const toggleAbout = () => {
+  document.getElementById('favs')?.classList.remove('open');
+  about.classList.toggle('open');
+  updateCredits();
+};
+about.querySelector('.about').addEventListener('click', toggleAbout);
+about.querySelector('.close').addEventListener('click', () => about.classList.remove('open'));
+const bar = document.querySelector('#shapes .bar');
+SHAPE_NAMES.forEach(name => {
+  const b = document.createElement('button');
+  b.className = 'shape';
+  b.dataset.shape = name;
+  b.dataset.label = SHAPES[name].label;
+  b.setAttribute('aria-label', SHAPES[name].label);
+  b.innerHTML = `<svg viewBox="-1.9 -1.9 3.8 3.8"><path d="${iconPath(name)}"/></svg>`;
+  b.addEventListener('click', () => setShape(name));
+  bar.appendChild(b);
+});
+setShape(shape);
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'a' || e.key === 'A') toggleAbout();
+  if (e.key === 'Escape') { about.classList.remove('open'); document.getElementById('favs')?.classList.remove('open'); }
+  const step = e.key === ']' ? 1 : e.key === '[' ? -1 : 0;
+  if (step) setShape(SHAPE_NAMES[(SHAPE_NAMES.indexOf(shape) + step + SHAPE_NAMES.length) % SHAPE_NAMES.length]);
+});
+// upload.wikimedia.org/wikipedia/commons/[thumb/]x/xy/Name.jpg[/2560px-Name.jpg] -> File:Name.jpg page
+const filePage = url => {
+  const name = url.match(/\/commons\/(?:thumb\/)?[0-9a-f]\/[0-9a-f]{2}\/([^/]+)/)?.[1];
+  return name && 'https://commons.wikimedia.org/wiki/File:' + name;
+};
+function updateCredits() {
+  if (!current || !about.classList.contains('open')) return;
+  const labels = ['bottom', 'middle', 'top'];
+  about.querySelector('.credits').innerHTML = 'On screen now: ' + current.urls
+    .map((u, i) => `<a href="${filePage(u) || u}" target="_blank" rel="noopener">${labels[i] ?? i + 1}</a>`)
+    .join(' · ');
+}
+
+CircleFavorites.init({
+  current: () => current && { urls: current.urls, seed: current.seed, shape: current.shape },
+  show: showSaved,
+  thumbnail,
+});
+
+addEventListener('click', advance);
+addEventListener('resize', () => current && show(current.urls, current.seed, current.imgs));
+const fromHash = CircleFavorites.fromHash();
+fromHash ? showSaved(fromHash) : advance();
+</script>
+</body>
+</html>
