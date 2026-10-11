@@ -37,7 +37,7 @@
     font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff; }
   #controls .bar { display: inline-flex; flex-wrap: wrap; align-items: stretch; border-radius: 4px;
     background: rgba(0,0,0,.55); backdrop-filter: blur(6px); opacity: .45; transition: opacity .15s; }
-  #controls .bar:hover, #controls .open .bar { opacity: 1; }
+  #controls:hover .bar, #controls .open .bar { opacity: 1; }   /* hovering any control reveals them all */
   #controls .bar button { all: unset; cursor: pointer; padding: 4px 9px; border-radius: 4px; }
   #shapes .bar { padding: 0 2px; }
   #controls .bar button:hover { background: rgba(255,255,255,.12); }
@@ -646,7 +646,8 @@ function thumbnail(width = 240) {
 
 // About panel. Lists Commons file pages for the photos on screen.
 const about = document.getElementById('about');
-about.addEventListener('click', e => e.stopPropagation()); // don't advance the images
+// clicks anywhere in the controls shouldn't advance the images
+document.getElementById('controls').addEventListener('click', e => e.stopPropagation());
 const toggleAbout = () => {
   document.getElementById('favs')?.classList.remove('open');
   about.classList.toggle('open');
@@ -654,7 +655,6 @@ const toggleAbout = () => {
 };
 about.querySelector('.about').addEventListener('click', toggleAbout);
 const dl = document.getElementById('download');
-dl.addEventListener('click', e => e.stopPropagation());   // don't advance the images
 dl.querySelector('.save').addEventListener('click', downloadJPG);
 about.querySelector('.close').addEventListener('click', () => about.classList.remove('open'));
 const bar = document.querySelector('#shapes .bar');
