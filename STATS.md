@@ -20,7 +20,7 @@ Snapshot taken 2026-10-11, when the project went live at nibble.pictures.
 - 3 commits, all at the end (the site was built outside git as numbered steps, then committed once finished)
 - 780 lines: `index.html` 620, `favorites.js` 160
 - 3 site files, about 38 KB in total, no build step and no dependencies
-- 6 tracked files
+- 7 tracked files (including this one)
 
 ## Content
 - 14 numbered steps explored before settling, archived in `~/circles-steps-archive`
