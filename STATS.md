@@ -23,7 +23,7 @@ Snapshot taken 2026-10-11, when the project went live at nibble.pictures.
 - 7 tracked files (including this one)
 
 ## Content
-- 14 numbered steps explored before settling, archived in `~/circles-steps-archive`
+- 14 numbered steps explored before settling, archived locally in `steps-archive/` (not in git)
 - 11 punch shapes: circle, square, triangle, star, heart, sakura, strawberry, apple, butterfly, umbrella, candy
 - 3 photos per set, 40 holes per punched sheet, 2 shadows per sheet (tight contact + wide ambient)
 
